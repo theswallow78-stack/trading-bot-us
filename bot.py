@@ -52,19 +52,27 @@ def us_market_is_open():
     if now.weekday() >= 5:
         return False
 
-    # Avant ouverture
-    if now.hour < 15 or (now.hour == 15 and now.minute < 30):
+    market_open = dtime(15, 30)
+    market_close = dtime(22, 0)
+
+    return market_open <= now.time() <= market_close
+
+
+# ---------- MESSAGE ÉTAT MARCHÉ ----------
+
+def check_market_and_notify():
+    if not us_market_is_open():
+        send_discord(
+            "🔴 **Marché US fermé**\n"
+            "⛔ Aucune analyse effectuée"
+        )
         return False
-
-    # Après fermeture
-    if now.hour > 21 or (now.hour == 21 and now.minute > 59):
-        return False
-
-    return True
-
-
-if not us_market_is_open():
-    sys.exit()
+    else:
+        send_discord(
+            "🟢 **Marché US ouvert**\n"
+            "📊 Analyse 1H en cours…"
+        )
+        return True
 
 
 # ---------- INDICATEURS ----------
@@ -151,12 +159,12 @@ def check_signal(symbol):
         tp = close + TP_MULT * atr
 
         send_discord(
-            f"🟢 BUY 1H — {symbol}\n"
-            f"Prix : {close:.2f}\n"
-            f"RSI : {rsi:.1f}\n"
-            f"Sentiment : {sentiment:.2f}\n"
-            f"SL : {sl:.2f}\n"
-            f"TP : {tp:.2f}"
+            f"🟢 **BUY 1H — {symbol}**\n"
+            f"💰 Prix : {close:.2f}\n"
+            f"📈 RSI : {rsi:.1f}\n"
+            f"📰 Sentiment : {sentiment:.2f}\n"
+            f"🛑 SL : {sl:.2f}\n"
+            f"🎯 TP : {tp:.2f}"
         )
 
     # ===== SELL =====
@@ -169,17 +177,21 @@ def check_signal(symbol):
         tp = close - TP_MULT * atr
 
         send_discord(
-            f"🔴 SELL 1H — {symbol}\n"
-            f"Prix : {close:.2f}\n"
-            f"RSI : {rsi:.1f}\n"
-            f"Sentiment : {sentiment:.2f}\n"
-            f"SL : {sl:.2f}\n"
-            f"TP : {tp:.2f}"
+            f"🔴 **SELL 1H — {symbol}**\n"
+            f"💰 Prix : {close:.2f}\n"
+            f"📉 RSI : {rsi:.1f}\n"
+            f"📰 Sentiment : {sentiment:.2f}\n"
+            f"🛑 SL : {sl:.2f}\n"
+            f"🎯 TP : {tp:.2f}"
         )
 
 
 # ---------- EXECUTION ----------
 
+if not check_market_and_notify():
+    sys.exit()
+
 for symbol in SYMBOLS:
     check_signal(symbol)
+
 
