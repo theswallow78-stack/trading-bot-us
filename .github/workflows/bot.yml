@@ -2,7 +2,7 @@ name: US Trading Bot
 
 on:
   schedule:
-    - cron: "*/5 * * * *" # cron enabled
+    - cron: "*/15 * * * *" # cron enabled
   workflow_dispatch:
 
 jobs:
