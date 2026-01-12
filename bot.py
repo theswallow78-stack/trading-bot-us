@@ -48,7 +48,6 @@ def us_market_is_open():
     tz = pytz.timezone("Europe/Paris")
     now = datetime.now(tz)
 
-    # Week-end
     if now.weekday() >= 5:
         return False
 
@@ -138,12 +137,16 @@ def check_signal(symbol):
     p1 = df.iloc[-2]
     p2 = df.iloc[-3]
 
-    close = c["Close"].item()
-    open_ = c["Open"].item()
-    ema = c["EMA200"].item()
-    vwap = c["VWAP"].item()
-    rsi = c["RSI"].item()
-    atr = c["ATR"].item()
+    close = float(c["Close"])
+    open_ = float(c["Open"])
+    ema = float(c["EMA200"])
+    vwap = float(c["VWAP"])
+    rsi = float(c["RSI"])
+    atr = float(c["ATR"])
+
+    # ✅ CORRECTION CRITIQUE ICI
+    rsi_p1 = float(p1["RSI"])
+    rsi_p2 = float(p2["RSI"])
 
     sentiment = get_yahoo_sentiment(symbol)
     if sentiment < SENTIMENT_BLOCK:
@@ -152,7 +155,7 @@ def check_signal(symbol):
     # ===== BUY =====
     if (
         close > ema and close > vwap and
-        p2["RSI"] < 40 and p1["RSI"] < 40 and rsi >= 40 and
+        rsi_p2 < 40 and rsi_p1 < 40 and rsi >= 40 and
         close > open_
     ):
         sl = close - SL_MULT * atr
@@ -170,7 +173,7 @@ def check_signal(symbol):
     # ===== SELL =====
     if (
         close < ema and close < vwap and
-        p2["RSI"] > 60 and p1["RSI"] > 60 and rsi <= 60 and
+        rsi_p2 > 60 and rsi_p1 > 60 and rsi <= 60 and
         close < open_
     ):
         sl = close + SL_MULT * atr
@@ -193,5 +196,3 @@ if not check_market_and_notify():
 
 for symbol in SYMBOLS:
     check_signal(symbol)
-
-
