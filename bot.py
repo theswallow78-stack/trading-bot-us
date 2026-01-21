@@ -27,14 +27,11 @@ SYMBOLS = [
 
 INTERVAL = "1h"
 PERIOD = "60d"
-
 RSI_PERIOD = 14
 EMA_PERIOD = 200
 ATR_PERIOD = 14
-
 SL_MULT = 1.2  
 TP_MULT = 3.0  
-
 SENTIMENT_BLOCK = -0.4 
 
 # ===================================================
@@ -54,7 +51,6 @@ def us_market_is_open():
     return market_open <= now.time() <= market_close
 
 def compute_indicators(df):
-    # RSI
     delta = df["Close"].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -62,40 +58,39 @@ def compute_indicators(df):
     avg_loss = loss.rolling(RSI_PERIOD).mean()
     rs = avg_gain / avg_loss
     df["RSI"] = 100 - (100 / (1 + rs))
-    
-    # EMA 200
     df["EMA200"] = df["Close"].ewm(span=EMA_PERIOD).mean()
-
-    # VWAP
     tp = (df["High"] + df["Low"] + df["Close"]) / 3
     df["VWAP"] = (tp * df["Volume"]).cumsum() / df["Volume"].cumsum()
-
-    # ATR
     tr = pd.concat([
         df["High"] - df["Low"],
         (df["High"] - df["Close"].shift()).abs(),
         (df["Low"] - df["Close"].shift()).abs()
     ], axis=1).max(axis=1)
     df["ATR"] = tr.rolling(ATR_PERIOD).mean()
-    
     return df
 
-def get_yahoo_sentiment(symbol):
+def get_company_info(symbol):
+    """Récupère le nom complet et le sentiment"""
     try:
         ticker = yf.Ticker(symbol)
+        # On tente de récupérer le nom complet
+        full_name = ticker.info.get('longName', symbol)
+        
         news = ticker.news
-        if not news: return 0.0
+        if not news: 
+            return full_name, 0.0
+        
         scores = []
         for article in news[:5]:
             text = f"{article.get('title', '')}. {article.get('summary', '')}"
             score = sentiment_analyzer.polarity_scores(text)["compound"]
             scores.append(score)
-        return sum(scores) / len(scores) if scores else 0.0
+        sentiment = sum(scores) / len(scores) if scores else 0.0
+        return full_name, sentiment
     except:
-        return 0.0
+        return symbol, 0.0
 
 def check_signal(symbol):
-    # Téléchargement avec auto_adjust pour éviter les formats complexes
     df = yf.download(symbol, interval=INTERVAL, period=PERIOD, progress=False, auto_adjust=True)
     if df.empty or len(df) < EMA_PERIOD: return
 
@@ -103,38 +98,31 @@ def check_signal(symbol):
     c = df.iloc[-1]
     p1 = df.iloc[-2]
 
-    # ✅ CORRECTION SÉCURISÉE : Extraction des valeurs même si Series
     def to_f(val):
-        if isinstance(val, pd.Series):
-            return float(val.iloc[0])
+        if isinstance(val, pd.Series): return float(val.iloc[0])
         return float(val)
 
-    close = to_f(c["Close"])
-    open_ = to_f(c["Open"])
-    ema = to_f(c["EMA200"])
-    vwap = to_f(c["VWAP"])
-    rsi = to_f(c["RSI"])
-    rsi_p1 = to_f(p1["RSI"])
+    close, open_ = to_f(c["Close"]), to_f(c["Open"])
+    ema, vwap = to_f(c["EMA200"]), to_f(c["VWAP"])
+    rsi, rsi_p1 = to_f(c["RSI"]), to_f(p1["RSI"])
     atr = to_f(c["ATR"])
     
-    sentiment = get_yahoo_sentiment(symbol)
+    # Récupération Nom + Sentiment
+    company_name, sentiment = get_company_info(symbol)
 
-    # LOG DE DIAGNOSTIC PROPRE
-    print(f"[{symbol}] Prix:{close:.2f} | EMA:{ema:.2f} | RSI:{rsi:.1f} | Sent:{sentiment:.2f}")
+    print(f"[{symbol}] {company_name} | RSI:{rsi:.1f} | Sent:{sentiment:.2f}")
 
-    # ===== STRATÉGIE BUY =====
+    # ===== SIGNAL BUY =====
     if (close > ema and close > vwap and rsi_p1 < 50 and rsi >= 50 and 
         sentiment >= SENTIMENT_BLOCK and close > open_):
-        sl = close - SL_MULT * atr
-        tp = close + TP_MULT * atr
-        send_discord(f"🚀 **BUY — {symbol}**\n💰 Prix : {close:.2f}\n📈 RSI : {rsi:.1f}\n🛑 SL : {sl:.2f} | 🎯 TP : {tp:.2f}")
+        sl, tp = close - SL_MULT * atr, close + TP_MULT * atr
+        send_discord(f"🚀 **BUY — {company_name} ({symbol})**\n💰 Prix : {close:.2f}\n📈 RSI : {rsi:.1f}\n🛑 SL : {sl:.2f} | 🎯 TP : {tp:.2f}")
 
-    # ===== STRATÉGIE SELL =====
+    # ===== SIGNAL SELL =====
     if (close < ema and close < vwap and rsi_p1 > 50 and rsi <= 50 and 
         sentiment >= SENTIMENT_BLOCK and close < open_):
-        sl = close + SL_MULT * atr
-        tp = close - TP_MULT * atr
-        send_discord(f"📉 **SELL — {symbol}**\n💰 Prix : {close:.2f}\n📉 RSI : {rsi:.1f}\n🛑 SL : {sl:.2f} | 🎯 TP : {tp:.2f}")
+        sl, tp = close + SL_MULT * atr, close - TP_MULT * atr
+        send_discord(f"📉 **SELL — {company_name} ({symbol})**\n💰 Prix : {close:.2f}\n📉 RSI : {rsi:.1f}\n🛑 SL : {sl:.2f} | 🎯 TP : {tp:.2f}")
 
 # ---------- EXECUTION ----------
 
