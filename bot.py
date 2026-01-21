@@ -3,9 +3,14 @@ import pandas as pd
 import requests
 import os
 import sys
+import warnings
 from datetime import datetime, time as dtime
 import pytz
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+# Supprimer les avertissements inutiles dans les logs
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # ================= CONFIG OPTIMISÉE =================
 
@@ -27,11 +32,9 @@ RSI_PERIOD = 14
 EMA_PERIOD = 200
 ATR_PERIOD = 14
 
-# Amélioration du Risk/Reward (Ratio 1:2.5)
 SL_MULT = 1.2  
 TP_MULT = 3.0  
 
-# Sentiment moins restrictif pour privilégier le prix
 SENTIMENT_BLOCK = -0.4 
 
 # ===================================================
@@ -50,13 +53,6 @@ def us_market_is_open():
     market_close = dtime(22, 0)
     return market_open <= now.time() <= market_close
 
-def check_market_and_notify():
-    if not us_market_is_open():
-        return False
-    else:
-        # On réduit le spam Discord, on n'envoie que si le marché est ouvert
-        return True
-
 def compute_indicators(df):
     # RSI
     delta = df["Close"].diff()
@@ -70,7 +66,7 @@ def compute_indicators(df):
     # EMA 200
     df["EMA200"] = df["Close"].ewm(span=EMA_PERIOD).mean()
 
-    # VWAP (Calculé sur la session actuelle)
+    # VWAP
     tp = (df["High"] + df["Low"] + df["Close"]) / 3
     df["VWAP"] = (tp * df["Volume"]).cumsum() / df["Volume"].cumsum()
 
@@ -90,7 +86,7 @@ def get_yahoo_sentiment(symbol):
         news = ticker.news
         if not news: return 0.0
         scores = []
-        for article in news[:5]: # Top 5 articles pour plus de rapidité
+        for article in news[:5]:
             text = f"{article.get('title', '')}. {article.get('summary', '')}"
             score = sentiment_analyzer.polarity_scores(text)["compound"]
             scores.append(score)
@@ -99,62 +95,46 @@ def get_yahoo_sentiment(symbol):
         return 0.0
 
 def check_signal(symbol):
-    df = yf.download(symbol, interval=INTERVAL, period=PERIOD, progress=False)
+    # Téléchargement avec auto_adjust pour éviter les formats complexes
+    df = yf.download(symbol, interval=INTERVAL, period=PERIOD, progress=False, auto_adjust=True)
     if df.empty or len(df) < EMA_PERIOD: return
 
     df = compute_indicators(df)
     c = df.iloc[-1]
     p1 = df.iloc[-2]
 
-    close = float(c["Close"])
-    open_ = float(c["Open"])
-    ema = float(c["EMA200"])
-    vwap = float(c["VWAP"])
-    rsi = float(c["RSI"])
-    rsi_p1 = float(p1["RSI"])
-    atr = float(c["ATR"])
+    # ✅ CORRECTION SÉCURISÉE : Extraction des valeurs même si Series
+    def to_f(val):
+        if isinstance(val, pd.Series):
+            return float(val.iloc[0])
+        return float(val)
+
+    close = to_f(c["Close"])
+    open_ = to_f(c["Open"])
+    ema = to_f(c["EMA200"])
+    vwap = to_f(c["VWAP"])
+    rsi = to_f(c["RSI"])
+    rsi_p1 = to_f(p1["RSI"])
+    atr = to_f(c["ATR"])
     
     sentiment = get_yahoo_sentiment(symbol)
 
-    # LOG DE DIAGNOSTIC (Visible dans GitHub Actions)
+    # LOG DE DIAGNOSTIC PROPRE
     print(f"[{symbol}] Prix:{close:.2f} | EMA:{ema:.2f} | RSI:{rsi:.1f} | Sent:{sentiment:.2f}")
 
-    # ===== NOUVELLE STRATÉGIE BUY (Tendance + Momentum) =====
-    # Condition : Prix > EMA200 ET Prix > VWAP ET RSI croise les 50 à la hausse
-    if (
-        close > ema and 
-        close > vwap and 
-        rsi_p1 < 50 and rsi >= 50 and 
-        sentiment >= SENTIMENT_BLOCK and
-        close > open_
-    ):
+    # ===== STRATÉGIE BUY =====
+    if (close > ema and close > vwap and rsi_p1 < 50 and rsi >= 50 and 
+        sentiment >= SENTIMENT_BLOCK and close > open_):
         sl = close - SL_MULT * atr
         tp = close + TP_MULT * atr
-        send_discord(
-            f"🚀 **SIGNAL BUY (Optimisé) — {symbol}**\n"
-            f"💰 Prix : {close:.2f}\n"
-            f"📈 RSI : {rsi:.1f} (Crossover 50)\n"
-            f"📰 Sentiment : {sentiment:.2f}\n"
-            f"🛑 SL : {sl:.2f} | 🎯 TP : {tp:.2f}"
-        )
+        send_discord(f"🚀 **BUY — {symbol}**\n💰 Prix : {close:.2f}\n📈 RSI : {rsi:.1f}\n🛑 SL : {sl:.2f} | 🎯 TP : {tp:.2f}")
 
-    # ===== NOUVELLE STRATÉGIE SELL (Short) =====
-    if (
-        close < ema and 
-        close < vwap and 
-        rsi_p1 > 50 and rsi <= 50 and 
-        sentiment >= SENTIMENT_BLOCK and # On ne short pas si sentiment trop négatif (risque de rebond violent)
-        close < open_
-    ):
+    # ===== STRATÉGIE SELL =====
+    if (close < ema and close < vwap and rsi_p1 > 50 and rsi <= 50 and 
+        sentiment >= SENTIMENT_BLOCK and close < open_):
         sl = close + SL_MULT * atr
         tp = close - TP_MULT * atr
-        send_discord(
-            f"📉 **SIGNAL SELL (Optimisé) — {symbol}**\n"
-            f"💰 Prix : {close:.2f}\n"
-            f"📉 RSI : {rsi:.1f} (Crossover 50)\n"
-            f"📰 Sentiment : {sentiment:.2f}\n"
-            f"🛑 SL : {sl:.2f} | 🎯 TP : {tp:.2f}"
-        )
+        send_discord(f"📉 **SELL — {symbol}**\n💰 Prix : {close:.2f}\n📉 RSI : {rsi:.1f}\n🛑 SL : {sl:.2f} | 🎯 TP : {tp:.2f}")
 
 # ---------- EXECUTION ----------
 
@@ -163,6 +143,9 @@ if __name__ == "__main__":
         print("Marché fermé.")
         sys.exit()
 
-    print(f"--- Analyse du {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
+    print(f"--- Analyse du {datetime.now(pytz.timezone('Europe/Paris')).strftime('%Y-%m-%d %H:%M:%S')} ---")
     for symbol in SYMBOLS:
-        check_signal(symbol)
+        try:
+            check_signal(symbol)
+        except Exception as e:
+            print(f"Erreur sur {symbol}: {e}")
